@@ -2,14 +2,25 @@
 """
 主程式入口點，用於啟動解題器。
 """
-import tkinter as tk
+
 from controller.controller import Controller
 
 if __name__ == '__main__':
-    # 從用戶輸入獲取寬度和高度，預設為6x5
-    user_input = input()
-    w, h = map(int, user_input.split()) if user_input != "" else (6, 5)
-    root = tk.Tk()
-    root.title('Block Fill Line Puzzle - Solver')
-    Controller(root, w=w, h=h, step_delay=0)
-    root.mainloop()
+    w, h, step_delay = 6, 5, 0
+    while True:
+        user_input = list(map(int, input("請輸入寬、高、每步間隔時間(毫秒)：").split()))
+        match user_input:
+            case []:
+                pass
+            case [a]:
+                w = h = a
+            case [a, b]:
+                w, h = a, b
+            case [a, b, c]:
+                w, h, step_delay = a, b, c
+            case _:
+                print("輸入格式錯誤，請重新輸入：")
+                continue
+        break
+    
+    Controller(w, h, step_delay)

@@ -1,9 +1,10 @@
 # model.py
 from enum import Enum, auto
-from typing import Iterator
 
 class TileState(Enum):
-    """格子的種類"""
+    """格子的狀態種類
+    在點擊時依序切換 SPACE -> WALL -> START -> SPACE
+    """
     SPACE = auto()
     WALL = auto()
     START = auto()
@@ -43,7 +44,13 @@ class Direction(Enum):
 
 
 class Board:
-    """遊戲板類，用於管理拼圖的網格狀態"""
+    """遊戲板類，用於管理拼圖的網格狀態
+    Attributes:
+        w (int): 遊戲板的寬度
+        h (int): 遊戲板的高度
+        _grid (list[list[TileState]]): 二維列表表示遊戲板上每個格子的狀態
+        start (tuple[int, int] | None): 起始點的座標，如果存在的話
+    """
     
     def __init__(self, w: int, h: int):
         """初始化遊戲板
@@ -53,7 +60,7 @@ class Board:
         """
         self.w = w
         self.h = h
-        self.grid: list[list[TileState]] = [[TileState.SPACE for _ in range(w)] for _ in range(h)]
+        self._grid: list[list[TileState]] = [[TileState.SPACE for _ in range(w)] for _ in range(h)]
         self.start: tuple[int,int]|None = None
 
     def in_bounds(self, x:int, y:int) -> bool:
@@ -74,12 +81,7 @@ class Board:
             y (int): y座標
             st (TileState): 要設置的狀態
         """
-        self.grid[y][x] = st
-        if st == TileState.START:
-            self.start = (x, y)
-        elif self.start == (x, y) and st != TileState.START:
-            # 如果覆蓋了起始點，清除起始點引用
-            self.start = None
+        self._grid[y][x] = st
 
     def get_state(self, x:int, y:int) -> TileState:
         """獲取指定座標的格子狀態
@@ -89,14 +91,37 @@ class Board:
         Returns:
             TileState: 格子的狀態
         """
-        return self.grid[y][x]
+        return self._grid[y][x]
+
+    def toggle_tile(self, x: int, y: int) -> None:
+        """切換格子的狀態，用於編輯模式
+        
+        Args:
+            x (int): x座標
+            y (int): y座標
+        """
+        st = self.get_state(x, y)
+        if st == TileState.SPACE: # 從空白切換為牆壁
+            self.set_state(x, y, TileState.WALL)
+        elif st == TileState.WALL: # 從牆壁切換為起始點
+            # 設置為起始點，也清除之前的起始點(如果有的話)，確保只有一個起始點存在
+            if self.start is not None: # 如果已經設起始點了
+                self.set_state(*self.start, TileState.SPACE)
+            self.set_state(x, y, TileState.START)
+            self.start = (x, y) # 更新起始點引用
+        elif st == TileState.START: # 從起始點切換為空白
+            # 覆蓋了起始點，清除起始點引用
+            self.set_state(x, y, TileState.SPACE)
+            self.start = None
+        else:
+            raise ValueError(f"無法切換狀態 {st}，只能切換 SPACE <-> WALL <-> START")
 
     def all_filled(self) -> bool:
         """檢查所有格子是否都已填充
         Returns:
             bool: 如果所有格子都已填充返回True，否則False
         """
-        for row in self.grid:
+        for row in self._grid:
             for s in row:
                 if s == TileState.SPACE:
                     return False
@@ -120,13 +145,9 @@ class Solver:
         
         # self.attempts_cnt = 0 # debug 用
 
-    def start(self) -> bool:
-        """開始解決拼圖
-        Returns:
-            bool: 如果解題器成功啟動返回True，否則False
-        """
-        if not self.board.start:
-            return False
+    def start(self) -> None:
+        """開始解決拼圖，初始化狀態並準備第一步"""
+        assert self.board.start is not None, "必須有起始點才能開始解題"
         sx, sy = self.board.start
         # 初始化狀態：將起始點標記為FILLED並推入路徑
         self.board.set_state(sx, sy, TileState.FILLED)
@@ -135,7 +156,6 @@ class Solver:
         self.tried_dirs = {}
         self.dead_ends = set()
         self.running = True
-        return True
 
     def step(self) -> tuple[str, dict[str, tuple[int,int] | Direction] | None]:
         """執行單一解題步驟，返回操作狀態與相關資訊。
