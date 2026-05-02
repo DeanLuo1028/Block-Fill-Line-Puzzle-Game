@@ -1,5 +1,6 @@
 # model.py
 from enum import Enum, auto
+from collections.abc import Iterator
 
 class TileState(Enum):
     """格子的狀態種類
@@ -42,6 +43,7 @@ class Direction(Enum):
             Direction.LEFT: '←'
         }[self]  # 這是一個set[dict[Direction, str]]，{}[self]表示自己的符號
 
+type coordinate = tuple[int, int]
 
 class Board:
     """遊戲板類，用於管理拼圖的網格狀態
@@ -49,7 +51,7 @@ class Board:
         w (int): 遊戲板的寬度
         h (int): 遊戲板的高度
         _grid (list[list[TileState]]): 二維列表表示遊戲板上每個格子的狀態
-        start (tuple[int, int] | None): 起始點的座標，如果存在的話
+        start (coordinate | None): 起始點的座標，如果存在的話
     """
     
     def __init__(self, w: int, h: int):
@@ -61,7 +63,7 @@ class Board:
         self.w = w
         self.h = h
         self._grid: list[list[TileState]] = [[TileState.SPACE for _ in range(w)] for _ in range(h)]
-        self.start: tuple[int,int]|None = None
+        self.start: coordinate|None = None
 
     def in_bounds(self, x:int, y:int) -> bool:
         """檢查座標是否在遊戲板範圍內
@@ -128,110 +130,163 @@ class Board:
         return True
 
 
+DIRS = list(Direction)
+
+
 class Solver:
-    """解題器類，使用DFS逐步解決拼圖，並記錄死胡同"""
-    
+    """
+    專業版解題器：
+    - DFS + 回溯
+    - 正確狀態建模（位置 + filled）
+    - dead-end 剪枝
+    - degree heuristic（超關鍵優化）
+    """
+
     def __init__(self, board: Board):
         """初始化解題器
         Args:
             board (Board): 遊戲板實例
         """
-        self.board = board
-        self.path: list[tuple[int,int]] = []       # 訪問順序的堆疊（已填充）
-        self.visited: set[tuple[int,int]] = set()  # 當前搜索中訪問的節點
-        self.tried_dirs: dict[tuple[int,int], set[Direction]] = {}  # 記錄每個位置嘗試過的方向
-        self.dead_ends: set[tuple[int,int]] = set()
         self.running = False
-        
-        # self.attempts_cnt = 0 # debug 用
+        self.board = board
 
-    def start(self) -> None:
-        """開始解決拼圖，初始化狀態並準備第一步"""
-        assert self.board.start is not None, "必須有起始點才能開始解題"
-        sx, sy = self.board.start
-        # 初始化狀態：將起始點標記為FILLED並推入路徑
-        self.board.set_state(sx, sy, TileState.FILLED)
-        self.path = [(sx, sy)]
-        self.visited = { (sx, sy) }
-        self.tried_dirs = {}
-        self.dead_ends = set()
+        self.width = board.w
+        self.height = board.h
+
+        # 所有可以填的格子（非牆）
+        self.total_cells = {
+            (x, y)
+            for x in range(self.width)
+            for y in range(self.height)
+            if board.get_state(x, y) != TileState.WALL
+        }
+
+        self.solution_path = []
+
+    # =========================
+    # 對外入口
+    # =========================
+    def solve(self) -> tuple[bool, list[tuple[coordinate, coordinate, Direction]]]:
         self.running = True
+        start: coordinate|None = self.board.start
+        if not start:
+            return False, []
 
-    def step(self) -> tuple[str, dict[str, tuple[int,int] | Direction] | None]:
-        """執行單一解題步驟，返回操作狀態與相關資訊。
-        Returns:
-            tuple [str, dict[str, tuple[int, int] | Direction] | None]:
-                - 第一元素：狀態字串，可為 'move'（前進）、'backtrack'（回溯）、'done'（完成）、'fail'（失敗）
-                - 第二元素（詳細資訊）：
-                  * 'move': {'from': (x, y), 'to': (nx, ny), 'dir': Direction} – 前進資訊
-                  * 'backtrack': {'popped': (x, y), 'current': (cx, cy)} – 回溯資訊
-                  * 'done'/'fail': None
+        visited_states = set()
+
+        success = self._dfs(
+            current=start,
+            filled=frozenset([start]),
+            path=[],
+            visited_states=visited_states
+        )
+
+        return success, self.solution_path
+
+    # =========================
+    # DFS 主體
+    # =========================
+    def _dfs(self, 
+             current: coordinate, 
+             filled: frozenset[coordinate], 
+             path: list[tuple[coordinate, coordinate, Direction]], 
+             visited_states: set):
+
+        # ✅ 成功條件：全部填滿
+        if len(filled) == len(self.total_cells):
+            self.solution_path = path.copy()
+            return True
+
+        state = (current, filled)
+
+        # ✅ 避免重複狀態
+        if state in visited_states:
+            return False
+        visited_states.add(state)
+
+        # =========================
+        # 🔥 剪枝 1：dead-end 檢測
+        # =========================
+        if self._has_dead_end(filled):
+            return False
+
+        # =========================
+        # 取得可走鄰居
+        # =========================
+        moves = []
+
+        for d in DIRS:
+            nx, ny = current[0] + d.dx, current[1] + d.dy
+
+            if (nx, ny) in filled:
+                continue
+            if not self._is_valid(nx, ny):
+                continue
+
+            moves.append((nx, ny, d))
+
+        # =========================
+        # 🔥 剪枝 2：degree heuristic（排序）
+        # =========================
+        moves.sort(key=lambda m: self._degree(m[0], m[1], filled))
+
+        # =========================
+        # DFS 遞迴
+        # =========================
+        for nx, ny, d in moves:
+            new_filled = filled | {(nx, ny)}
+            path.append((current, (nx, ny), d))
+
+            if self._dfs((nx, ny), new_filled, path, visited_states):
+                return True
+
+            path.pop()
+
+        return False
+
+    # =========================
+    # 工具函數
+    # =========================
+
+    def _is_valid(self, x: int, y: int) -> bool:
+        if not (0 <= x < self.width and 0 <= y < self.height):
+            return False
+        return self.board.get_state(x, y) != TileState.WALL
+
+    def _neighbors(self, x: int, y: int) -> Iterator[coordinate]:
+        for d in DIRS:
+            nx, ny = x + d.dx, y + d.dy
+            if self._is_valid(nx, ny):
+                yield nx, ny
+
+    def _degree(self, x: int, y: int, filled: frozenset[coordinate]) -> int:
         """
-        if not self.running:
-            return ('fail', None)
+        計算「未來可走數量」
+        → 越小越優先（關鍵優化）
+        """
+        count = 0
+        for nx, ny in self._neighbors(x, y):
+            if (nx, ny) not in filled:
+                count += 1
+        return count
 
-        # 檢查是否已完全填充（勝利條件）
-        if self.board.all_filled():
-            self.running = False
-            
-            # print(f'共嘗試了 {self.attempts_cnt} 步') # debug 用
-            
-            return ('done', None)
+    def _has_dead_end(self, filled):
+        dead_count = 0
 
-        if not self.path:
-            self.running = False
-            return ('fail', None)
-
-        # self.attempts_cnt += 1 # debug 用
-        
-        cur = self.path[-1]
-        cx, cy = cur
-
-
-        # 初始化當前位置的已嘗試方向集合
-        if cur not in self.tried_dirs:
-            self.tried_dirs[cur] = set()
-
-
-        # 依序嘗試上、右、下、左四方向
-        for d in Direction:
-
-            if d in self.tried_dirs[cur]:
+        for (x, y) in self.total_cells:
+            if (x, y) in filled:
                 continue
-            self.tried_dirs[cur].add(d)  # 記錄已嘗試此方向，避免重複
 
+            free_neighbors = 0
+            for nx, ny in self._neighbors(x, y):
+                if (nx, ny) not in filled:
+                    free_neighbors += 1
 
-            nx, ny = cx + d.dx, cy + d.dy
-            if not self.board.in_bounds(nx, ny):
-                continue
-            st = self.board.get_state(nx, ny)
-            if st == TileState.SPACE:
-                # 有效移動：填充新位置，推入路徑堆疊
-                self.board.set_state(nx, ny, TileState.FILLED)
-                # 前一格保持FILLED狀態，由控制器更新顯示方向符號
-                self.path.append((nx, ny))
-                self.visited.add((nx, ny))
-                return ('move', {'from': (cx, cy), 'to': (nx, ny), 'dir': d})
+            if free_neighbors == 0:
+                dead_count += 1
 
-            # 遇牆壁、已填或起始點：無法前進，試下一方向
+                # ❗關鍵：只能允許「最多一個」死點（終點）
+                if dead_count > 1:
+                    return True
 
-        # 無有效前進方向：死巷，回溯
-        self.dead_ends.add(cur)
-        # 彈出路徑頂端，回溯至前一位置；恢復為空白（起始點亦允許）
-        popped = self.path.pop()
-        # 控制器依回溯操作更新視圖（清除方向符號、顏色）
-        self.board.set_state(popped[0], popped[1], TileState.SPACE)
-        # 清理追蹤資料
-        if popped in self.visited:
-            self.visited.remove(popped)
-        if popped in self.tried_dirs:
-            del self.tried_dirs[popped]
-
-
-        if not self.path:
-            # 彈出了起始點且沒有路徑剩下 -> 失敗
-            self.running = False
-            return ('fail', None)
-
-        current_after = self.path[-1]
-        return ('backtrack', {'popped': popped, 'current': current_after})
+        return False

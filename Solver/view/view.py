@@ -23,7 +23,6 @@ class BoardView:
         
         Args:
             board (Board): 模型的Board實例
-            on_click_tile (Callable[[int, int], None]): 點擊格子的回調函數(x,y)
         """
         self.root = tk.Tk()
         self.root.title('Block Fill Line Puzzle - Solver')
@@ -60,7 +59,7 @@ class BoardView:
         """設置控制按鈕的回調函數"""
         self.start_btn.config(command=on_start)
         self.reset_btn.config(command=on_reset)
-        self.pause_btn.config(command=on_pause)
+        self.pause_btn.config(command=on_pause) # TODO 新增暫停後再按下能繼續解題的功能
 
     def set_on_click_tile(self, on_click_tile: Callable[[int, int], None]):
         """設置格子點擊回調"""
